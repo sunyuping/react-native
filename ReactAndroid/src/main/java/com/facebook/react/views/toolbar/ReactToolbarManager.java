@@ -1,36 +1,32 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 package com.facebook.react.views.toolbar;
-
-import javax.annotation.Nullable;
-
-import java.util.Map;
 
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Color;
-import android.os.SystemClock;
+import androidx.core.view.ViewCompat;
+import android.util.LayoutDirection;
 import android.view.MenuItem;
 import android.view.View;
-
-import com.facebook.react.R;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.common.MapBuilder;
-import com.facebook.react.uimanager.ReactProp;
+import com.facebook.react.uimanager.PixelUtil;
 import com.facebook.react.uimanager.ThemedReactContext;
 import com.facebook.react.uimanager.UIManagerModule;
 import com.facebook.react.uimanager.ViewGroupManager;
+import com.facebook.react.uimanager.annotations.ReactProp;
 import com.facebook.react.uimanager.events.EventDispatcher;
 import com.facebook.react.views.toolbar.events.ToolbarClickEvent;
+import java.util.Map;
+import javax.annotation.Nullable;
 
 /**
  * Manages instances of ReactToolbar.
@@ -38,6 +34,7 @@ import com.facebook.react.views.toolbar.events.ToolbarClickEvent;
 public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
 
   private static final String REACT_CLASS = "ToolbarAndroid";
+  private static final int COMMAND_DISMISS_POPUP_MENUS = 1;
 
   @Override
   public String getName() {
@@ -57,6 +54,16 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
   @ReactProp(name = "navIcon")
   public void setNavIcon(ReactToolbar view, @Nullable ReadableMap navIcon) {
     view.setNavIconSource(navIcon);
+  }
+
+  @ReactProp(name = "overflowIcon")
+  public void setOverflowIcon(ReactToolbar view, @Nullable ReadableMap overflowIcon) {
+    view.setOverflowIconSource(overflowIcon);
+  }
+
+  @ReactProp(name = "rtl")
+  public void setRtl(ReactToolbar view, boolean rtl) {
+    ViewCompat.setLayoutDirection(view, rtl ? ViewCompat.LAYOUT_DIRECTION_RTL : ViewCompat.LAYOUT_DIRECTION_LTR);
   }
 
   @ReactProp(name = "subtitle")
@@ -89,21 +96,36 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
     }
   }
 
-  @ReactProp(name = "actions")
+  @ReactProp(name = "contentInsetStart", defaultFloat = Float.NaN)
+  public void setContentInsetStart(ReactToolbar view, float insetStart) {
+    int inset = Float.isNaN(insetStart) ?
+        getDefaultContentInsets(view.getContext())[0] :
+        Math.round(PixelUtil.toPixelFromDIP(insetStart));
+    view.setContentInsetsRelative(inset, view.getContentInsetEnd());
+  }
+
+  @ReactProp(name = "contentInsetEnd", defaultFloat = Float.NaN)
+  public void setContentInsetEnd(ReactToolbar view, float insetEnd) {
+    int inset = Float.isNaN(insetEnd) ?
+        getDefaultContentInsets(view.getContext())[1] :
+        Math.round(PixelUtil.toPixelFromDIP(insetEnd));
+    view.setContentInsetsRelative(view.getContentInsetStart(), inset);
+  }
+
+  @ReactProp(name = "nativeActions")
   public void setActions(ReactToolbar view, @Nullable ReadableArray actions) {
     view.setActions(actions);
   }
 
   @Override
   protected void addEventEmitters(final ThemedReactContext reactContext, final ReactToolbar view) {
-    final EventDispatcher mEventDispatcher = reactContext.getNativeModule(UIManagerModule.class)
-        .getEventDispatcher();
+    final EventDispatcher mEventDispatcher = reactContext.getNativeModule(UIManagerModule.class).getEventDispatcher();
     view.setNavigationOnClickListener(
         new View.OnClickListener() {
           @Override
           public void onClick(View v) {
             mEventDispatcher.dispatchEvent(
-                new ToolbarClickEvent(view.getId(), SystemClock.uptimeMillis(), -1));
+                new ToolbarClickEvent(view.getId(), -1));
           }
         });
 
@@ -114,7 +136,6 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
             mEventDispatcher.dispatchEvent(
                 new ToolbarClickEvent(
                     view.getId(),
-                    SystemClock.uptimeMillis(),
                     menuItem.getOrder()));
             return true;
           }
@@ -137,6 +158,57 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
     return true;
   }
 
+  @Nullable
+  @Override
+  public Map<String, Integer> getCommandsMap() {
+    return MapBuilder.of("dismissPopupMenus", COMMAND_DISMISS_POPUP_MENUS);
+  }
+
+  @Override
+  public void receiveCommand(ReactToolbar view, int commandType, @Nullable ReadableArray args) {
+    switch (commandType) {
+      case COMMAND_DISMISS_POPUP_MENUS: {
+        view.dismissPopupMenus();
+        return;
+      }
+      default:
+        throw new IllegalArgumentException(String.format(
+          "Unsupported command %d received by %s.",
+          commandType,
+          getClass().getSimpleName()));
+    }
+  }
+
+  private int[] getDefaultContentInsets(Context context) {
+    Resources.Theme theme = context.getTheme();
+    TypedArray toolbarStyle = null;
+    TypedArray contentInsets = null;
+
+    try {
+      toolbarStyle =
+          theme.obtainStyledAttributes(new int[] {getIdentifier(context, "toolbarStyle")});
+
+      int toolbarStyleResId = toolbarStyle.getResourceId(0, 0);
+
+      contentInsets =
+          theme.obtainStyledAttributes(
+              toolbarStyleResId,
+              new int[] {
+                getIdentifier(context, "contentInsetStart"),
+                getIdentifier(context, "contentInsetEnd"),
+              });
+
+      int contentInsetStart = contentInsets.getDimensionPixelSize(0, 0);
+      int contentInsetEnd = contentInsets.getDimensionPixelSize(1, 0);
+
+      return new int[] {contentInsetStart, contentInsetEnd};
+    } finally {
+      recycleQuietly(toolbarStyle);
+      recycleQuietly(contentInsets);
+    }
+
+  }
+
   private static int[] getDefaultColors(Context context) {
     Resources.Theme theme = context.getTheme();
     TypedArray toolbarStyle = null;
@@ -145,14 +217,18 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
     TypedArray subtitleTextAppearance = null;
 
     try {
-      toolbarStyle = theme
-          .obtainStyledAttributes(new int[]{R.attr.toolbarStyle});
+      toolbarStyle =
+          theme.obtainStyledAttributes(new int[] {getIdentifier(context, "toolbarStyle")});
+
       int toolbarStyleResId = toolbarStyle.getResourceId(0, 0);
-      textAppearances = theme.obtainStyledAttributes(
-          toolbarStyleResId, new int[]{
-              R.attr.titleTextAppearance,
-              R.attr.subtitleTextAppearance,
-          });
+      textAppearances =
+          theme.obtainStyledAttributes(
+              toolbarStyleResId,
+              new int[] {
+                getIdentifier(context, "titleTextAppearance"),
+                getIdentifier(context, "subtitleTextAppearance"),
+              });
+
       int titleTextAppearanceResId = textAppearances.getResourceId(0, 0);
       int subtitleTextAppearanceResId = textAppearances.getResourceId(1, 0);
 
@@ -177,6 +253,15 @@ public class ReactToolbarManager extends ViewGroupManager<ReactToolbar> {
     if (style != null) {
       style.recycle();
     }
+  }
+
+  /**
+   * The appcompat-v7 BUCK dep is listed as a provided_dep, which complains that
+   * com.facebook.react.R doesn't exist. Since the attributes provided from a parent, we can access
+   * those attributes dynamically.
+   */
+  private static int getIdentifier(Context context, String name) {
+    return context.getResources().getIdentifier(name, "attr", context.getPackageName());
   }
 
 }

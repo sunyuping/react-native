@@ -1,19 +1,23 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+// Copyright (c) Facebook, Inc. and its affiliates.
+
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
 
 package com.facebook.react.uimanager;
 
-import javax.annotation.Nullable;
-
-import java.lang.reflect.Method;
-import java.util.HashMap;
-import java.util.Map;
-
 import android.view.View;
-
 import com.facebook.common.logging.FLog;
+import com.facebook.react.bridge.Dynamic;
 import com.facebook.react.bridge.JSApplicationIllegalArgumentException;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.uimanager.annotations.ReactProp;
+import com.facebook.react.uimanager.annotations.ReactPropGroup;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+import javax.annotation.Nullable;
 
 /**
  * This class is responsible for holding view manager property setters and is used in a process of
@@ -23,6 +27,11 @@ import com.facebook.react.bridge.ReadableMap;
 
   private static final Map<Class, Map<String, PropSetter>> CLASS_PROPS_CACHE = new HashMap<>();
   private static final Map<String, PropSetter> EMPTY_PROPS_MAP = new HashMap<>();
+
+  public static void clear() {
+    CLASS_PROPS_CACHE.clear();
+    EMPTY_PROPS_MAP.clear();
+  }
 
   /*package*/ static abstract class PropSetter {
 
@@ -66,17 +75,19 @@ import com.facebook.react.bridge.ReadableMap;
     public void updateViewProp(
         ViewManager viewManager,
         View viewToUpdate,
-        CatalystStylesDiffMap props) {
+        ReactStylesDiffMap props) {
       try {
         if (mIndex == null) {
           VIEW_MGR_ARGS[0] = viewToUpdate;
           VIEW_MGR_ARGS[1] = extractProperty(props);
           mSetter.invoke(viewManager, VIEW_MGR_ARGS);
+          Arrays.fill(VIEW_MGR_ARGS, null);
         } else {
           VIEW_MGR_GROUP_ARGS[0] = viewToUpdate;
           VIEW_MGR_GROUP_ARGS[1] = mIndex;
           VIEW_MGR_GROUP_ARGS[2] = extractProperty(props);
           mSetter.invoke(viewManager, VIEW_MGR_GROUP_ARGS);
+          Arrays.fill(VIEW_MGR_GROUP_ARGS, null);
         }
       } catch (Throwable t) {
         FLog.e(ViewManager.class, "Error while updating prop " + mPropName, t);
@@ -87,15 +98,17 @@ import com.facebook.react.bridge.ReadableMap;
 
     public void updateShadowNodeProp(
         ReactShadowNode nodeToUpdate,
-        CatalystStylesDiffMap props) {
+        ReactStylesDiffMap props) {
       try {
         if (mIndex == null) {
           SHADOW_ARGS[0] = extractProperty(props);
           mSetter.invoke(nodeToUpdate, SHADOW_ARGS);
+          Arrays.fill(SHADOW_ARGS, null);
         } else {
           SHADOW_GROUP_ARGS[0] = mIndex;
           SHADOW_GROUP_ARGS[1] = extractProperty(props);
           mSetter.invoke(nodeToUpdate, SHADOW_GROUP_ARGS);
+          Arrays.fill(SHADOW_GROUP_ARGS, null);
         }
       } catch (Throwable t) {
         FLog.e(ViewManager.class, "Error while updating prop " + mPropName, t);
@@ -104,7 +117,23 @@ import com.facebook.react.bridge.ReadableMap;
       }
     }
 
-    protected abstract @Nullable Object extractProperty(CatalystStylesDiffMap props);
+    protected abstract @Nullable Object extractProperty(ReactStylesDiffMap props);
+  }
+
+  private static class DynamicPropSetter extends PropSetter {
+
+    public DynamicPropSetter(ReactProp prop, Method setter) {
+      super(prop, "mixed", setter);
+    }
+
+    public DynamicPropSetter(ReactPropGroup prop, Method setter, int index) {
+      super(prop, "mixed", setter, index);
+    }
+
+    @Override
+    protected Object extractProperty(ReactStylesDiffMap props) {
+      return props.getDynamic(mPropName);
+    }
   }
 
   private static class IntPropSetter extends PropSetter {
@@ -122,7 +151,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected Object extractProperty(CatalystStylesDiffMap props) {
+    protected Object extractProperty(ReactStylesDiffMap props) {
       return props.getInt(mPropName, mDefaultValue);
     }
   }
@@ -136,8 +165,13 @@ import com.facebook.react.bridge.ReadableMap;
       mDefaultValue = defaultValue;
     }
 
+    public DoublePropSetter(ReactPropGroup prop, Method setter, int index, double defaultValue) {
+      super(prop, "number", setter, index);
+      mDefaultValue = defaultValue;
+    }
+
     @Override
-    protected Object extractProperty(CatalystStylesDiffMap props) {
+    protected Object extractProperty(ReactStylesDiffMap props) {
       return props.getDouble(mPropName, mDefaultValue);
     }
   }
@@ -152,7 +186,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected Object extractProperty(CatalystStylesDiffMap props) {
+    protected Object extractProperty(ReactStylesDiffMap props) {
       return props.getBoolean(mPropName, mDefaultValue) ? Boolean.TRUE : Boolean.FALSE;
     }
   }
@@ -172,7 +206,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected Object extractProperty(CatalystStylesDiffMap props) {
+    protected Object extractProperty(ReactStylesDiffMap props) {
       return props.getFloat(mPropName, mDefaultValue);
     }
   }
@@ -184,7 +218,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected @Nullable Object extractProperty(CatalystStylesDiffMap props) {
+    protected @Nullable Object extractProperty(ReactStylesDiffMap props) {
       return props.getArray(mPropName);
     }
   }
@@ -196,7 +230,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected @Nullable Object extractProperty(CatalystStylesDiffMap props) {
+    protected @Nullable Object extractProperty(ReactStylesDiffMap props) {
       return props.getMap(mPropName);
     }
   }
@@ -208,7 +242,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected @Nullable Object extractProperty(CatalystStylesDiffMap props) {
+    protected @Nullable Object extractProperty(ReactStylesDiffMap props) {
       return props.getString(mPropName);
     }
   }
@@ -220,7 +254,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected @Nullable Object extractProperty(CatalystStylesDiffMap props) {
+    protected @Nullable Object extractProperty(ReactStylesDiffMap props) {
       if (!props.isNull(mPropName)) {
         return props.getBoolean(mPropName, /* ignored */ false) ? Boolean.TRUE : Boolean.FALSE;
       }
@@ -239,7 +273,7 @@ import com.facebook.react.bridge.ReadableMap;
     }
 
     @Override
-    protected @Nullable Object extractProperty(CatalystStylesDiffMap props) {
+    protected @Nullable Object extractProperty(ReactStylesDiffMap props) {
       if (!props.isNull(mPropName)) {
         return props.getInt(mPropName, /* ignored */ 0);
       }
@@ -299,8 +333,10 @@ import com.facebook.react.bridge.ReadableMap;
    */
   /*package*/ static Map<String, PropSetter> getNativePropSettersForShadowNodeClass(
       Class<? extends ReactShadowNode> cls) {
-    if (cls == ReactShadowNode.class) {
-      return EMPTY_PROPS_MAP;
+    for (Class iface : cls.getInterfaces()) {
+      if (iface == ReactShadowNode.class) {
+        return EMPTY_PROPS_MAP;
+      }
     }
     Map<String, PropSetter> props = CLASS_PROPS_CACHE.get(cls);
     if (props != null) {
@@ -319,7 +355,9 @@ import com.facebook.react.bridge.ReadableMap;
       ReactProp annotation,
       Method method,
       Class<?> propTypeClass) {
-    if (propTypeClass == boolean.class) {
+    if (propTypeClass == Dynamic.class) {
+      return new DynamicPropSetter(annotation, method);
+    } else if (propTypeClass == boolean.class) {
       return new BooleanPropSetter(annotation, method, annotation.defaultBoolean());
     } else if (propTypeClass == int.class) {
       return new IntPropSetter(annotation, method, annotation.defaultInt());
@@ -349,7 +387,13 @@ import com.facebook.react.bridge.ReadableMap;
       Class<?> propTypeClass,
       Map<String, PropSetter> props) {
     String[] names = annotation.names();
-    if (propTypeClass == int.class) {
+    if (propTypeClass == Dynamic.class) {
+      for (int i = 0; i < names.length; i++) {
+        props.put(
+            names[i],
+            new DynamicPropSetter(annotation, method, i));
+      }
+    } else if (propTypeClass == int.class) {
       for (int i = 0; i < names.length; i++) {
         props.put(
             names[i],
@@ -360,6 +404,12 @@ import com.facebook.react.bridge.ReadableMap;
         props.put(
             names[i],
             new FloatPropSetter(annotation, method, i, annotation.defaultFloat()));
+      }
+    } else if (propTypeClass == double.class) {
+      for (int i = 0; i < names.length; i++) {
+        props.put(
+            names[i],
+            new DoublePropSetter(annotation, method, i, annotation.defaultDouble()));
       }
     } else if (propTypeClass == Integer.class) {
       for (int i = 0; i < names.length; i++) {

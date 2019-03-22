@@ -1,69 +1,53 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 package com.facebook.react.uimanager;
 
-import javax.annotation.Nullable;
-
-import java.lang.reflect.Field;
-import java.util.HashMap;
-import java.util.Map;
-
 import android.view.View;
-
+import com.facebook.react.bridge.BaseJavaModule;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
-import com.facebook.react.bridge.ReadableMapKeySeyIterator;
-import com.facebook.react.touch.CatalystInterceptingViewGroup;
 import com.facebook.react.touch.JSResponderHandler;
+import com.facebook.react.touch.ReactInterceptingViewGroup;
+import com.facebook.react.uimanager.annotations.ReactProp;
+import com.facebook.react.uimanager.annotations.ReactPropGroup;
+import com.facebook.react.uimanager.annotations.ReactPropertyHolder;
+import com.facebook.yoga.YogaMeasureMode;
+import java.util.Map;
+
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 /**
  * Class responsible for knowing how to create and update catalyst Views of a given type. It is also
- * responsible for creating and updating CSSNode subclasses used for calculating position and size
+ * responsible for creating and updating CSSNodeDEPRECATED subclasses used for calculating position and size
  * for the corresponding native view.
  */
-public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
+@ReactPropertyHolder
+public abstract class ViewManager<T extends View, C extends ReactShadowNode>
+  extends BaseJavaModule {
 
-  private static final Map<Class, Map<String, UIProp.Type>> CLASS_PROP_CACHE = new HashMap<>();
-
-  public final void updateProperties(T viewToUpdate, CatalystStylesDiffMap props) {
-    Map<String, ViewManagersPropertyCache.PropSetter> propSetters =
-        ViewManagersPropertyCache.getNativePropSettersForViewManagerClass(getClass());
-    ReadableMap propMap = props.mBackingMap;
-    ReadableMapKeySeyIterator iterator = propMap.keySetIterator();
-    // TODO(krzysztof): Remove missingSetters code once all views are migrated to @ReactProp
-    boolean missingSetters = false;
-    while (iterator.hasNextKey()) {
-      String key = iterator.nextKey();
-      ViewManagersPropertyCache.PropSetter setter = propSetters.get(key);
-      if (setter != null) {
-        setter.updateViewProp(this, viewToUpdate, props);
-      } else {
-        missingSetters = true;
-      }
-    }
-    if (missingSetters) {
-      updateView(viewToUpdate, props);
-    }
+  public final void updateProperties(@Nonnull T viewToUpdate, ReactStylesDiffMap props) {
+    ViewManagerPropertyUpdater.updateProps(this, viewToUpdate, props);
     onAfterUpdateTransaction(viewToUpdate);
   }
 
   /**
    * Creates a view and installs event emitters on it.
    */
-  public final T createView(
-      ThemedReactContext reactContext,
+  public final @Nonnull T createView(
+      @Nonnull ThemedReactContext reactContext,
       JSResponderHandler jsResponderHandler) {
     T view = createViewInstance(reactContext);
     addEventEmitters(reactContext, view);
-    if (view instanceof CatalystInterceptingViewGroup) {
-      ((CatalystInterceptingViewGroup) view).setOnInterceptTouchEventListener(jsResponderHandler);
+    if (view instanceof ReactInterceptingViewGroup) {
+      ((ReactInterceptingViewGroup) view).setOnInterceptTouchEventListener(jsResponderHandler);
     }
     return view;
   }
@@ -72,14 +56,20 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    * @return the name of this view manager. This will be the name used to reference this view
    * manager from JavaScript in createReactNativeComponentClass.
    */
-  public abstract String getName();
+  public abstract @Nonnull String getName();
 
   /**
    * This method should return a subclass of {@link ReactShadowNode} which will be then used for
-   * measuring position and size of the view. In mose of the cases this should just return an
+   * measuring position and size of the view. In most of the cases this should just return an
    * instance of {@link ReactShadowNode}
    */
-  public abstract C createShadowNodeInstance();
+  public C createShadowNodeInstance() {
+    throw new RuntimeException("ViewManager subclasses must implement createShadowNodeInstance()");
+  }
+
+  public @Nonnull C createShadowNodeInstance(@Nonnull ReactApplicationContext context) {
+    return createShadowNodeInstance();
+  }
 
   /**
    * This method should return {@link Class} instance that represent type of shadow node that this
@@ -97,13 +87,13 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    * Subclasses should return a new View instance of the proper type.
    * @param reactContext
    */
-  protected abstract T createViewInstance(ThemedReactContext reactContext);
+  protected abstract @Nonnull T createViewInstance(@Nonnull ThemedReactContext reactContext);
 
   /**
    * Called when view is detached from view hierarchy and allows for some additional cleanup by
    * the {@link ViewManager} subclass.
    */
-  public void onDropViewInstance(ThemedReactContext reactContext, T view) {
+  public void onDropViewInstance(@Nonnull T view) {
   }
 
   /**
@@ -111,19 +101,7 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    * might want to override this method if your view needs to emit events besides basic touch events
    * to JS (e.g. scroll events).
    */
-  protected void addEventEmitters(ThemedReactContext reactContext, T view) {
-  }
-
-  /**
-   * Subclass should use this method to populate native view with updated style properties. In case
-   * when a certain property is present in {@param props} map but the value is null, this property
-   * should be reset to the default value
-   *
-   * TODO(krzysztof) This method should be replaced by updateShadowNode and removed completely after
-   * all view managers adapt @ReactProp
-   */
-  @Deprecated
-  protected void updateView(T root, CatalystStylesDiffMap props) {
+  protected void addEventEmitters(@Nonnull ThemedReactContext reactContext, @Nonnull T view) {
   }
 
   /**
@@ -132,7 +110,7 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    * you want to override this method you should call super.onAfterUpdateTransaction from it as
    * the parent class of the ViewManager may rely on callback being executed.
    */
-  protected void onAfterUpdateTransaction(T view) {
+  protected void onAfterUpdateTransaction(@Nonnull T view) {
   }
 
   /**
@@ -146,7 +124,7 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    *
    * TODO(7247021): Replace updateExtraData with generic update props mechanism after D2086999
    */
-  public abstract void updateExtraData(T root, Object extraData);
+  public abstract void updateExtraData(@Nonnull T root, Object extraData);
 
   /**
    * Subclasses may use this method to receive events/commands directly from JS through the
@@ -157,7 +135,7 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
    * @param commandId code of the command
    * @param args optional arguments for the command
    */
-  public void receiveCommand(T root, int commandId, @Nullable ReadableArray args) {
+  public void receiveCommand(@Nonnull T root, int commandId, @Nullable ReadableArray args) {
   }
 
   /**
@@ -227,42 +205,24 @@ public abstract class ViewManager<T extends View, C extends ReactShadowNode> {
   }
 
   public Map<String, String> getNativeProps() {
-    // TODO(krzysztof): This method will just delegate to ViewManagersPropertyRegistry once
-    // refactoring is finished
-    Class cls = getClass();
-    Map<String, String> nativeProps =
-        ViewManagersPropertyCache.getNativePropsForView(cls, getShadowNodeClass());
-    while (cls.getSuperclass() != null) {
-      Map<String, UIProp.Type> props = getNativePropsForClass(cls);
-      for (Map.Entry<String, UIProp.Type> entry : props.entrySet()) {
-        nativeProps.put(entry.getKey(), entry.getValue().toString());
-      }
-      cls = cls.getSuperclass();
-    }
-    return nativeProps;
+    return ViewManagerPropertyUpdater.getNativeProps(getClass(), getShadowNodeClass());
   }
 
-  private Map<String, UIProp.Type> getNativePropsForClass(Class cls) {
-    // TODO(krzysztof): Blow up this method once refactoring is finished
-    Map<String, UIProp.Type> props = CLASS_PROP_CACHE.get(cls);
-    if (props != null) {
-      return props;
-    }
-    props = new HashMap<>();
-    for (Field f : cls.getDeclaredFields()) {
-      UIProp annotation = f.getAnnotation(UIProp.class);
-      if (annotation != null) {
-        UIProp.Type type = annotation.value();
-        try {
-          String name = (String) f.get(this);
-          props.put(name, type);
-        } catch (IllegalAccessException e) {
-          throw new RuntimeException(
-              "UIProp " + cls.getName() + "." + f.getName() + " must be public.");
-        }
-      }
-    }
-    CLASS_PROP_CACHE.put(cls, props);
-    return props;
+  /**
+   *
+   */
+  public @Nullable Object updateLocalData(@Nonnull T view, ReactStylesDiffMap props, ReactStylesDiffMap localData) {
+    return null;
+  }
+
+  public long measure(
+      ReactContext context,
+      ReadableMap localData,
+      ReadableMap props,
+      float width,
+      YogaMeasureMode widthMode,
+      float height,
+      YogaMeasureMode heightMode) {
+    return 0;
   }
 }

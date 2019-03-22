@@ -1,48 +1,70 @@
 /*
- *  Copyright (c) 2013, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
 #import "RCTImagePickerManager.h"
-#import "RCTRootView.h"
-#import "RCTLog.h"
-#import "RCTUtils.h"
-
-#import <UIKit/UIKit.h>
 
 #import <MobileCoreServices/UTCoreTypes.h>
+#import <UIKit/UIKit.h>
 
-@interface RCTImagePickerManager ()<UIImagePickerControllerDelegate, UINavigationControllerDelegate>
+#import <React/RCTConvert.h>
+#import <React/RCTImageStoreManager.h>
+#import <React/RCTRootView.h>
+#import <React/RCTUtils.h>
+
+@interface RCTImagePickerController : UIImagePickerController
+
+@property (nonatomic, assign) BOOL unmirrorFrontFacingCamera;
+
+@end
+
+@implementation RCTImagePickerController
+
+@end
+
+@interface RCTImagePickerManager () <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 
 @end
 
 @implementation RCTImagePickerManager
 {
-  NSMutableArray *_pickers;
-  NSMutableArray *_pickerCallbacks;
-  NSMutableArray *_pickerCancelCallbacks;
+  NSMutableArray<UIImagePickerController *> *_pickers;
+  NSMutableArray<RCTResponseSenderBlock> *_pickerCallbacks;
+  NSMutableArray<RCTResponseSenderBlock> *_pickerCancelCallbacks;
 }
 
 RCT_EXPORT_MODULE(ImagePickerIOS);
 
-- (instancetype)init
+@synthesize bridge = _bridge;
+
+- (id)init
 {
-  if ((self = [super init])) {
-    _pickers = [NSMutableArray new];
-    _pickerCallbacks = [NSMutableArray new];
-    _pickerCancelCallbacks = [NSMutableArray new];
+  if (self = [super init]) {
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(cameraChanged:)
+                                                 name:@"AVCaptureDeviceDidStartRunningNotification"
+                                               object:nil];
   }
   return self;
 }
 
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"AVCaptureDeviceDidStartRunningNotification" object:nil];
+}
+
+- (dispatch_queue_t)methodQueue
+{
+  return dispatch_get_main_queue();
+}
+
 RCT_EXPORT_METHOD(canRecordVideos:(RCTResponseSenderBlock)callback)
 {
-  NSArray *availableMediaTypes = [UIImagePickerController availableMediaTypesForSourceType:UIImagePickerControllerSourceTypeCamera];
+  NSArray<NSString *> *availableMediaTypes = [UIImagePickerController availableMediaTypesForSourceType:UIImagePickerControllerSourceTypeCamera];
   callback(@[@([availableMediaTypes containsObject:(NSString *)kUTTypeMovie])]);
 }
 
@@ -59,23 +81,21 @@ RCT_EXPORT_METHOD(openCameraDialog:(NSDictionary *)config
     cancelCallback(@[@"Camera access is unavailable in an app extension"]);
     return;
   }
-  
-  UIWindow *keyWindow = RCTSharedApplication().keyWindow;
-  UIViewController *rootViewController = keyWindow.rootViewController;
 
-  UIImagePickerController *imagePicker = [UIImagePickerController new];
+  RCTImagePickerController *imagePicker = [RCTImagePickerController new];
   imagePicker.delegate = self;
   imagePicker.sourceType = UIImagePickerControllerSourceTypeCamera;
+  NSArray<NSString *> *availableMediaTypes = [UIImagePickerController availableMediaTypesForSourceType:UIImagePickerControllerSourceTypeCamera];
+  imagePicker.mediaTypes = availableMediaTypes;
+  imagePicker.unmirrorFrontFacingCamera = [RCTConvert BOOL:config[@"unmirrorFrontFacingCamera"]];
 
-  if ([config[@"videoMode"] boolValue]) {
+  if ([RCTConvert BOOL:config[@"videoMode"]]) {
     imagePicker.cameraCaptureMode = UIImagePickerControllerCameraCaptureModeVideo;
   }
 
-  [_pickers addObject:imagePicker];
-  [_pickerCallbacks addObject:callback];
-  [_pickerCancelCallbacks addObject:cancelCallback];
-
-  [rootViewController presentViewController:imagePicker animated:YES completion:nil];
+  [self _presentPicker:imagePicker
+       successCallback:callback
+        cancelCallback:cancelCallback];
 }
 
 RCT_EXPORT_METHOD(openSelectDialog:(NSDictionary *)config
@@ -86,62 +106,115 @@ RCT_EXPORT_METHOD(openSelectDialog:(NSDictionary *)config
     cancelCallback(@[@"Image picker is currently unavailable in an app extension"]);
     return;
   }
-  
-  UIWindow *keyWindow = RCTSharedApplication().keyWindow;
-  UIViewController *rootViewController = keyWindow.rootViewController;
 
   UIImagePickerController *imagePicker = [UIImagePickerController new];
   imagePicker.delegate = self;
   imagePicker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
 
-  NSMutableArray *allowedTypes = [NSMutableArray new];
-  if ([config[@"showImages"] boolValue]) {
+  NSMutableArray<NSString *> *allowedTypes = [NSMutableArray new];
+  if ([RCTConvert BOOL:config[@"showImages"]]) {
     [allowedTypes addObject:(NSString *)kUTTypeImage];
   }
-  if ([config[@"showVideos"] boolValue]) {
+  if ([RCTConvert BOOL:config[@"showVideos"]]) {
     [allowedTypes addObject:(NSString *)kUTTypeMovie];
   }
 
   imagePicker.mediaTypes = allowedTypes;
 
-  [_pickers addObject:imagePicker];
-  [_pickerCallbacks addObject:callback];
-  [_pickerCancelCallbacks addObject:cancelCallback];
-
-  [rootViewController presentViewController:imagePicker animated:YES completion:nil];
+  [self _presentPicker:imagePicker
+       successCallback:callback
+        cancelCallback:cancelCallback];
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker
-didFinishPickingMediaWithInfo:(NSDictionary *)info
+didFinishPickingMediaWithInfo:(NSDictionary<NSString *, id> *)info
 {
-  NSUInteger index = [_pickers indexOfObject:picker];
-  RCTResponseSenderBlock callback = _pickerCallbacks[index];
+  NSString *mediaType = info[UIImagePickerControllerMediaType];
+  BOOL isMovie = [mediaType isEqualToString:(NSString *)kUTTypeMovie];
+  NSString *key = isMovie ? UIImagePickerControllerMediaURL : UIImagePickerControllerReferenceURL;
+  NSURL *imageURL = info[key];
+  UIImage *image = info[UIImagePickerControllerOriginalImage];
+  NSNumber *width = 0;
+  NSNumber *height = 0;
+  if (image) {
+    height = @(image.size.height);
+    width = @(image.size.width);
+  }
+  if (imageURL) {
+    [self _dismissPicker:picker args:@[imageURL.absoluteString, RCTNullIfNil(height), RCTNullIfNil(width)]];
+    return;
+  }
 
-  [_pickers removeObjectAtIndex:index];
-  [_pickerCallbacks removeObjectAtIndex:index];
-  [_pickerCancelCallbacks removeObjectAtIndex:index];
+  // This is a newly taken image, and doesn't have a URL yet.
+  // We need to save it to the image store first.
+  UIImage *originalImage = info[UIImagePickerControllerOriginalImage];
 
-  UIWindow *keyWindow = RCTSharedApplication().keyWindow;
-  UIViewController *rootViewController = keyWindow.rootViewController;
-  [rootViewController dismissViewControllerAnimated:YES completion:nil];
-
-  callback(@[[info[UIImagePickerControllerReferenceURL] absoluteString]]);
+  // WARNING: Using ImageStoreManager may cause a memory leak because the
+  // image isn't automatically removed from store once we're done using it.
+  [_bridge.imageStoreManager storeImage:originalImage withBlock:^(NSString *tempImageTag) {
+    [self _dismissPicker:picker args:tempImageTag ? @[tempImageTag, RCTNullIfNil(height), RCTNullIfNil(width)] : nil];
+  }];
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
 {
+  [self _dismissPicker:picker args:nil];
+}
+
+- (void)_presentPicker:(UIImagePickerController *)imagePicker
+       successCallback:(RCTResponseSenderBlock)callback
+        cancelCallback:(RCTResponseSenderBlock)cancelCallback
+{
+  if (!_pickers) {
+    _pickers = [NSMutableArray new];
+    _pickerCallbacks = [NSMutableArray new];
+    _pickerCancelCallbacks = [NSMutableArray new];
+  }
+
+  [_pickers addObject:imagePicker];
+  [_pickerCallbacks addObject:callback];
+  [_pickerCancelCallbacks addObject:cancelCallback];
+
+  UIViewController *rootViewController = RCTPresentedViewController();
+  [rootViewController presentViewController:imagePicker animated:YES completion:nil];
+}
+
+- (void)_dismissPicker:(UIImagePickerController *)picker args:(NSArray *)args
+{
   NSUInteger index = [_pickers indexOfObject:picker];
-  RCTResponseSenderBlock callback = _pickerCancelCallbacks[index];
+  if (index == NSNotFound) {
+    // This happens if the user selects multiple items in succession.
+    return;
+  }
+
+  RCTResponseSenderBlock successCallback = _pickerCallbacks[index];
+  RCTResponseSenderBlock cancelCallback = _pickerCancelCallbacks[index];
 
   [_pickers removeObjectAtIndex:index];
   [_pickerCallbacks removeObjectAtIndex:index];
   [_pickerCancelCallbacks removeObjectAtIndex:index];
 
-  UIWindow *keyWindow = RCTSharedApplication().keyWindow;
-  UIViewController *rootViewController = keyWindow.rootViewController;
+  UIViewController *rootViewController = RCTPresentedViewController();
   [rootViewController dismissViewControllerAnimated:YES completion:nil];
 
-  callback(@[]);
+  if (args) {
+    successCallback(args);
+  } else {
+    cancelCallback(@[]);
+  }
+}
+
+- (void)cameraChanged:(NSNotification *)notification
+{
+  for (UIImagePickerController *picker in _pickers) {
+    if ([picker isKindOfClass:[RCTImagePickerController class]]
+      && ((RCTImagePickerController *)picker).unmirrorFrontFacingCamera
+      && picker.cameraDevice == UIImagePickerControllerCameraDeviceFront) {
+      picker.cameraViewTransform = CGAffineTransformScale(CGAffineTransformIdentity, -1, 1);
+    } else {
+      picker.cameraViewTransform = CGAffineTransformIdentity;
+    }
+  }
 }
 
 @end

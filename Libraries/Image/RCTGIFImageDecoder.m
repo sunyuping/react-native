@@ -1,19 +1,16 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #import "RCTGIFImageDecoder.h"
 
 #import <ImageIO/ImageIO.h>
-#import <MobileCoreServices/MobileCoreServices.h>
 #import <QuartzCore/QuartzCore.h>
 
-#import "RCTUtils.h"
+#import <React/RCTUtils.h>
 
 @implementation RCTGIFImageDecoder
 
@@ -30,37 +27,54 @@ RCT_EXPORT_MODULE()
 - (RCTImageLoaderCancellationBlock)decodeImageData:(NSData *)imageData
                                               size:(CGSize)size
                                              scale:(CGFloat)scale
-                                        resizeMode:(UIViewContentMode)resizeMode
+                                        resizeMode:(RCTResizeMode)resizeMode
                                  completionHandler:(RCTImageLoaderCompletionBlock)completionHandler
 {
   CGImageSourceRef imageSource = CGImageSourceCreateWithData((CFDataRef)imageData, NULL);
-  NSDictionary *properties = (__bridge_transfer NSDictionary *)CGImageSourceCopyProperties(imageSource, NULL);
-  NSUInteger loopCount = [properties[(id)kCGImagePropertyGIFDictionary][(id)kCGImagePropertyGIFLoopCount] unsignedIntegerValue];
+  if (!imageSource) {
+    completionHandler(nil, nil);
+    return ^{};
+  }
+  NSDictionary<NSString *, id> *properties = (__bridge_transfer NSDictionary *)CGImageSourceCopyProperties(imageSource, NULL);
+  CGFloat loopCount = 0;
+  if ([[properties[(id)kCGImagePropertyGIFDictionary] allKeys] containsObject:(id)kCGImagePropertyGIFLoopCount]) {
+    loopCount = [properties[(id)kCGImagePropertyGIFDictionary][(id)kCGImagePropertyGIFLoopCount] unsignedIntegerValue];
+    if (loopCount == 0) {
+      // A loop count of 0 means infinite
+      loopCount = HUGE_VALF;
+    } else {
+      // A loop count of 1 means it should repeat twice, 2 means, thrice, etc.
+      loopCount += 1;
+    }
+  }
 
   UIImage *image = nil;
   size_t imageCount = CGImageSourceGetCount(imageSource);
   if (imageCount > 1) {
 
     NSTimeInterval duration = 0;
-    NSMutableArray *delays = [NSMutableArray arrayWithCapacity:imageCount];
-    NSMutableArray *images = [NSMutableArray arrayWithCapacity:imageCount];
+    NSMutableArray<NSNumber *> *delays = [NSMutableArray arrayWithCapacity:imageCount];
+    NSMutableArray<id /* CGIMageRef */> *images = [NSMutableArray arrayWithCapacity:imageCount];
     for (size_t i = 0; i < imageCount; i++) {
 
       CGImageRef imageRef = CGImageSourceCreateImageAtIndex(imageSource, i, NULL);
+      if (!imageRef) {
+        continue;
+      }
       if (!image) {
         image = [UIImage imageWithCGImage:imageRef scale:scale orientation:UIImageOrientationUp];
       }
 
-      NSDictionary *frameProperties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(imageSource, i, NULL);
-      NSDictionary *frameGIFProperties = frameProperties[(id)kCGImagePropertyGIFDictionary];
+      NSDictionary<NSString *, id> *frameProperties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(imageSource, i, NULL);
+      NSDictionary<NSString *, id> *frameGIFProperties = frameProperties[(id)kCGImagePropertyGIFDictionary];
 
       const NSTimeInterval kDelayTimeIntervalDefault = 0.1;
       NSNumber *delayTime = frameGIFProperties[(id)kCGImagePropertyGIFUnclampedDelayTime] ?: frameGIFProperties[(id)kCGImagePropertyGIFDelayTime];
       if (delayTime == nil) {
-        if (i == 0) {
+        if (delays.count == 0) {
           delayTime = @(kDelayTimeIntervalDefault);
         } else {
-          delayTime = delays[i - 1];
+          delayTime = delays.lastObject;
         }
       }
 
@@ -70,12 +84,12 @@ RCT_EXPORT_MODULE()
       }
 
       duration += delayTime.doubleValue;
-      delays[i] = delayTime;
-      images[i] = (__bridge_transfer id)imageRef;
+      [delays addObject:delayTime];
+      [images addObject:(__bridge_transfer id)imageRef];
     }
     CFRelease(imageSource);
 
-    NSMutableArray *keyTimes = [NSMutableArray arrayWithCapacity:delays.count];
+    NSMutableArray<NSNumber *> *keyTimes = [NSMutableArray arrayWithCapacity:delays.count];
     NSTimeInterval runningDuration = 0;
     for (NSNumber *delayNumber in delays) {
       [keyTimes addObject:@(runningDuration / duration)];
@@ -87,10 +101,12 @@ RCT_EXPORT_MODULE()
     // Create animation
     CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:@"contents"];
     animation.calculationMode = kCAAnimationDiscrete;
-    animation.repeatCount = loopCount == 0 ? HUGE_VALF : loopCount;
+    animation.repeatCount = loopCount;
     animation.keyTimes = keyTimes;
     animation.values = images;
     animation.duration = duration;
+    animation.removedOnCompletion = NO;
+    animation.fillMode = kCAFillModeForwards;
     image.reactKeyframeAnimation = animation;
 
   } else {

@@ -1,10 +1,8 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 package com.facebook.react.touch;
@@ -18,7 +16,7 @@ import android.view.ViewParent;
 /**
  * This class coordinates JSResponder commands for {@link UIManagerModule}. It should be set as
  * OnInterceptTouchEventListener for all newly created native views that implements
- * {@link CatalystInterceptingViewGroup} and thanks to the information whether JSResponder is set
+ * {@link ReactInterceptingViewGroup} and thanks to the information whether JSResponder is set
  * and to which view it will correctly coordinate the return values of
  * {@link OnInterceptTouchEventListener} such that touch events will be dispatched to the view
  * selected by JS gesture recognizer.
